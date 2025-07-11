@@ -10,5 +10,5 @@ $subscription_urls = [
   #"https://hiddify-freevpnhomes-subscription.meshkintaj.homes",
   #"https://github.com/Surfboardv2ray/Subs/raw/refs/heads/main/IPTest/output",
   #"https://raw.githubusercontent.com/ermaozi/get_subscribe/refs/heads/main/subscribe/v2ray.txt",
-  "https://raw.githubusercontent.com/yebekhe/vpn-fail/main/sub-link",
+  "https://raw.githubusercontent.com/itsyebekhe/PSGP/refs/heads/main/private_configs.json",
 ];
