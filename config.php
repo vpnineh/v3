@@ -12,6 +12,6 @@ $subscription_urls = [
   #"https://raw.githubusercontent.com/ermaozi/get_subscribe/refs/heads/main/subscribe/v2ray.txt",
   "https://raw.githubusercontent.com/roosterkid/openproxylist/b01cd5defd19736518c387f279e24f3874136177/V2RAY_RAW.txt",
   "https://github.com/vpnineh/wow/raw/refs/heads/main/sub",
-  "https://raw.githubusercontent.com/vpnineh/tlgrm/refs/heads/main/subscription/normal/mix"
-
+  "https://raw.githubusercontent.com/vpnineh/tlgrm/refs/heads/main/subscription/normal/mix",
+    "https://raw.githubusercontent.com/sakha1370/OpenRay/refs/heads/main/output_iran/iran_top100_checked.txt"
 ];
