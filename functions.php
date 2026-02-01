@@ -5,10 +5,10 @@
 ======================= */
 function detect_type($input)
 {
-    if (str_starts_with($input, "vmess://")) return "vmess";
-    if (str_starts_with($input, "vless://")) return "vless";
-    if (str_starts_with($input, "trojan://")) return "trojan";
-    if (str_starts_with($input, "ss://")) return "ss";
+    if (substr($input, 0, 8) === "vmess://") return "vmess";
+    if (substr($input, 0, 8) === "vless://") return "vless";
+    if (substr($input, 0, 9) === "trojan://") return "trojan";
+    if (substr($input, 0, 5) === "ss://") return "ss";
     return "";
 }
 
@@ -17,22 +17,19 @@ function detect_type($input)
 ======================= */
 function parse_config($input)
 {
-    return match (detect_type($input)) {
-        "vmess" => decode_vmess($input),
-        "vless", "trojan" => parseProxyUrl($input),
-        "ss" => ParseShadowsocks($input),
-        default => null
-    };
+    $type = detect_type($input);
+    if ($type === "vmess") return decode_vmess($input);
+    if ($type === "vless" || $type === "trojan") return parseProxyUrl($input);
+    if ($type === "ss") return ParseShadowsocks($input);
+    return null;
 }
 
 function build_config($input, $type)
 {
-    return match ($type) {
-        "vmess" => encode_vmess($input),
-        "vless", "trojan" => buildProxyUrl($input, $type),
-        "ss" => BuildShadowsocks($input),
-        default => ""
-    };
+    if ($type === "vmess") return encode_vmess($input);
+    if ($type === "vless" || $type === "trojan") return buildProxyUrl($input, $type);
+    if ($type === "ss") return BuildShadowsocks($input);
+    return "";
 }
 
 /* =======================
@@ -54,23 +51,23 @@ function encode_vmess($config)
 function parseProxyUrl($url)
 {
     $u = parse_url($url);
-    parse_str($u['query'] ?? '', $params);
+    parse_str(isset($u['query']) ? $u['query'] : '', $params);
 
     return [
-        "username" => $u['user'] ?? '',
-        "hostname" => $u['host'] ?? '',
-        "port" => $u['port'] ?? '',
+        "username" => isset($u['user']) ? $u['user'] : '',
+        "hostname" => isset($u['host']) ? $u['host'] : '',
+        "port" => isset($u['port']) ? $u['port'] : '',
         "params" => $params,
-        "hash" => $u['fragment'] ?? ''
+        "hash" => isset($u['fragment']) ? $u['fragment'] : ''
     ];
 }
 
 function buildProxyUrl($o, $type)
 {
-    $url = "{$type}://";
-    if ($o['username']) $url .= $o['username'] . "@";
+    $url = $type . "://";
+    if (!empty($o['username'])) $url .= $o['username'] . "@";
     $url .= $o['hostname'];
-    if ($o['port']) $url .= ":" . $o['port'];
+    if (!empty($o['port'])) $url .= ":" . $o['port'];
     if (!empty($o['params'])) $url .= "?" . http_build_query($o['params']);
     if (!empty($o['hash'])) $url .= "#" . $o['hash'];
     return $url;
@@ -82,13 +79,15 @@ function buildProxyUrl($o, $type)
 function ParseShadowsocks($c)
 {
     $u = parse_url($c);
-    [$method, $pass] = explode(":", base64_decode($u['user']));
+    $decoded = base64_decode($u['user']);
+    list($method, $pass) = explode(":", $decoded, 2);
+
     return [
         "encryption_method" => $method,
         "password" => $pass,
         "server_address" => $u['host'],
         "server_port" => $u['port'],
-        "name" => urldecode($u['fragment'] ?? '')
+        "name" => isset($u['fragment']) ? urldecode($u['fragment']) : ''
     ];
 }
 
@@ -112,7 +111,7 @@ function ip_info($ip)
 {
     if (!is_ip($ip)) {
         $records = dns_get_record($ip, DNS_A);
-        if (!$records || !isset($records[0]['ip'])) return null;
+        if (!$records) return null;
         $ip = $records[array_rand($records)]['ip'];
     }
 
@@ -147,33 +146,31 @@ function getFlags($cc)
 }
 
 /* =======================
-   IP / PORT extraction
+   IP / PORT
 ======================= */
 function get_ip($c, $type, $reality)
 {
-    return match ($type) {
-        "vmess" => $c['sni'] ?? $c['host'] ?? $c['add'],
-        "vless" => $reality ? $c['hostname'] : ($c['params']['sni'] ?? $c['hostname']),
-        "trojan" => $c['params']['sni'] ?? $c['hostname'],
-        "ss" => $c['server_address'],
-        default => null
-    };
+    if ($type === "vmess") return !empty($c['sni']) ? $c['sni'] : (!empty($c['host']) ? $c['host'] : $c['add']);
+    if ($type === "vless") return $reality ? $c['hostname'] : (!empty($c['params']['sni']) ? $c['params']['sni'] : $c['hostname']);
+    if ($type === "trojan") return !empty($c['params']['sni']) ? $c['params']['sni'] : $c['hostname'];
+    if ($type === "ss") return $c['server_address'];
+    return null;
 }
 
 function get_port($c, $type)
 {
-    return $type === 'ss' ? $c['server_port'] : ($c['port'] ?? null);
+    return $type === "ss" ? $c['server_port'] : (isset($c['port']) ? $c['port'] : null);
 }
 
 /* =======================
-   DEDUPLICATION CORE
+   DEDUP CORE
 ======================= */
 function generate_fingerprint($parsed, $type)
 {
     $base = [
         'type' => $type,
         'host' => get_ip($parsed, $type, false),
-        'port' => get_port($parsed, $type),
+        'port' => get_port($parsed, $type)
     ];
 
     if (isset($parsed['params'])) {
@@ -186,11 +183,11 @@ function generate_fingerprint($parsed, $type)
 
 function short_id($fp)
 {
-    return substr(hexdec(substr($fp, 0, 6)), 0, 4);
+    return substr((string)hexdec(substr($fp, 0, 6)), 0, 4);
 }
 
 /* =======================
-   NAME GENERATION
+   NAME
 ======================= */
 function generate_name($flag, $id, $reality)
 {
@@ -200,7 +197,7 @@ function generate_name($flag, $id, $reality)
 }
 
 /* =======================
-   PROCESS SINGLE CONFIG
+   PROCESS CONFIG
 ======================= */
 function process_config($config)
 {
@@ -213,25 +210,21 @@ function process_config($config)
     $is_reality = stripos($config, "reality") !== false;
     $ip = get_ip($parsed, $type, $is_reality);
     $port = get_port($parsed, $type);
-
     if (!$ip || !$port) return false;
 
     $fp = generate_fingerprint($parsed, $type);
     $id = short_id($fp);
     $flag = get_flag($ip);
 
-    $key = match ($type) {
-        "vmess" => "ps",
-        "vless", "trojan" => "hash",
-        "ss" => "name"
-    };
+    if ($type === "vmess") $parsed['ps'] = generate_name($flag, $id, $is_reality);
+    elseif ($type === "ss") $parsed['name'] = generate_name($flag, $id, $is_reality);
+    else $parsed['hash'] = generate_name($flag, $id, $is_reality);
 
-    $parsed[$key] = generate_name($flag, $id, $is_reality);
     return build_config($parsed, $type);
 }
 
 /* =======================
-   SUBSCRIPTION PROCESS
+   SUBSCRIPTIONS
 ======================= */
 function process_subscriptions($input)
 {
@@ -251,32 +244,27 @@ function process_subscriptions($input)
 
         $type = detect_type($processed);
         $fp = generate_fingerprint(parse_config($processed), $type);
-
         if (isset($seen[$fp])) continue;
-        $seen[$fp] = true;
 
+        $seen[$fp] = true;
         $out[$type][] = $processed;
     }
 
     return $out;
 }
 
-/* =======================
-   MERGE MULTI SUBS
-======================= */
 function merge_subscription($urls)
 {
     $out = [];
-
     foreach ($urls as $url) {
         $data = @file_get_contents($url);
         if (!$data) continue;
 
         $processed = process_subscriptions($data);
         foreach ($processed as $type => $list) {
-            $out[$type] = array_merge($out[$type] ?? [], $list);
+            if (!isset($out[$type])) $out[$type] = [];
+            $out[$type] = array_merge($out[$type], $list);
         }
     }
-
     return $out;
 }
