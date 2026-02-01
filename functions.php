@@ -1,4 +1,8 @@
 <?php
+
+// آرایه جهانی برای ذخیره امضای کانفیگ‌ها جهت جلوگیری از تکرار
+$seen_signatures = [];
+
 /** Detect Type of Config */
 function detect_type($input)
 {
@@ -69,50 +73,15 @@ function encode_vmess($config)
     return $vmess_config;
 }
 
-/** remove duplicate vmess configs */
-function remove_duplicate_vmess($input)
-{
-    $array = explode("\n", $input);
-    $result = [];
-    foreach ($array as $item) {
-        $parts = decode_vmess($item);
-        if ($parts !== null) {
-            $part_ps = $parts["ps"];
-            unset($parts["ps"]);
-            if (count($parts) >= 3) {
-                ksort($parts);
-                $part_serialize = serialize($parts);
-                $result[$part_serialize][] = $part_ps ?? "";
-            }
-        }
-    }
-    $finalResult = [];
-    foreach ($result as $serial => $ps) {
-        $partAfterHash = $ps[0] ?? "";
-        $part_serialize = unserialize($serial);
-        $part_serialize["ps"] = $partAfterHash;
-        $finalResult[] = encode_vmess($part_serialize);
-    }
-    $output = "";
-    foreach ($finalResult as $config) {
-        $output .= $output == "" ? $config : "\n" . $config;
-    }
-    return $output;
-}
-
 /** Parse vless and trojan config*/
 function parseProxyUrl($url, $type = "trojan")
 {
-    // Parse the URL into components
     $parsedUrl = parse_url($url);
-
-    // Extract the parameters from the query string
     $params = [];
     if (isset($parsedUrl["query"])) {
         parse_str($parsedUrl["query"], $params);
     }
 
-    // Construct the output object
     $output = [
         "protocol" => $type,
         "username" => isset($parsedUrl["user"]) ? $parsedUrl["user"] : "",
@@ -177,55 +146,18 @@ function addHash($obj)
     return $url;
 }
 
-/** remove duplicate vless and trojan config*/
-function remove_duplicate_xray($input, $type)
-{
-    $array = explode("\n", $input);
-
-    foreach ($array as $item) {
-        $parts = parseProxyUrl($item, $type);
-        $part_hash = $parts["hash"];
-        unset($parts["hash"]);
-        ksort($parts["params"]);
-        $part_serialize = serialize($parts);
-        $result[$part_serialize][] = $part_hash ?? "";
-    }
-
-    $finalResult = [];
-    foreach ($result as $url => $parts) {
-        $partAfterHash = $parts[0] ?? "";
-        $part_serialize = unserialize($url);
-        $part_serialize["hash"] = $partAfterHash;
-        $finalResult[] = buildProxyUrl($part_serialize, $type);
-    }
-
-    $output = "";
-    foreach ($finalResult as $config) {
-        $output .= $output == "" ? $config : "\n" . $config;
-    }
-    return $output;
-}
-
 /** parse shadowsocks configs */
 function ParseShadowsocks($config_str)
 {
-    // Parse the config string as a URL
     $url = parse_url($config_str);
-
-    // Extract the encryption method and password from the user info
     list($encryption_method, $password) = explode(
         ":",
         base64_decode($url["user"])
     );
-
-    // Extract the server address and port from the host and path
     $server_address = $url["host"];
     $server_port = $url["port"];
-
-    // Extract the name from the fragment (if present)
     $name = isset($url["fragment"]) ? urldecode($url["fragment"]) : null;
 
-    // Create an array to hold the server configuration
     $server = [
         "encryption_method" => $encryption_method,
         "password" => $password,
@@ -234,63 +166,26 @@ function ParseShadowsocks($config_str)
         "name" => $name,
     ];
 
-    // Return the server configuration as a JSON string
     return $server;
 }
 
 /** build shadowsocks configs */
 function BuildShadowsocks($server)
 {
-    // Encode the encryption method and password as a Base64-encoded string
     $user = base64_encode(
         $server["encryption_method"] . ":" . $server["password"]
     );
-
-    // Construct the URL from the server address, port, and user info
     $url = "ss://$user@{$server["server_address"]}:{$server["server_port"]}";
-
-    // If the name is present, add it as a fragment to the URL
     if (!empty($server["name"])) {
         $url .= "#" . urlencode($server["name"]);
     }
-
-    // Return the URL as a string
     return $url;
-}
-
-/** remove duplicate shadowsocks configs */
-function remove_duplicate_ss($input)
-{
-    $array = explode("\n", $input);
-
-    foreach ($array as $item) {
-        $parts = ParseShadowsocks($item);
-        $part_hash = $parts["name"];
-        unset($parts["name"]);
-        ksort($parts);
-        $part_serialize = serialize($parts);
-        $result[$part_serialize][] = $part_hash ?? "";
-    }
-
-    $finalResult = [];
-    foreach ($result as $url => $parts) {
-        $partAfterHash = $parts[0] ?? "";
-        $part_serialize = unserialize($url);
-        $part_serialize["name"] = $partAfterHash;
-        $finalResult[] = BuildShadowsocks($part_serialize);
-    }
-
-    $output = "";
-    foreach ($finalResult as $config) {
-        $output .= $output == "" ? $config : "\n" . $config;
-    }
-    return $output;
 }
 
 function is_ip($string)
 {
     $ipv4_pattern = '/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/';
-    $ipv6_pattern = '/^[0-9a-fA-F:]+$/'; // matches any valid IPv6 address
+    $ipv6_pattern = '/^[0-9a-fA-F:]+$/';
 
     if (preg_match($ipv4_pattern, $string) || preg_match($ipv6_pattern, $string)) {
         return true;
@@ -303,19 +198,18 @@ function ip_info($ip)
 {
     if (is_ip($ip) === false) {
         $ip_address_array = dns_get_record($ip, DNS_A);
-        if (is_array($ip_address_array)) {
+        if (is_array($ip_address_array) && !empty($ip_address_array)) {
             $randomKey = array_rand($ip_address_array);
             $ip = $ip_address_array[$randomKey]["ip"];
         }
     }
 
-    // استفاده از API جدید ipinfo.io به جای api.country.is
-    $url = "https://ipinfo.io/" . $ip . "/json";
+    // استفاده از API سایت iplocation.net (iplocation.io)
+    $url = "https://api.iplocation.net/?ip=" . $ip;
 
-    // مدیریت خطا با @ و چک کردن نتیجه
     $response = @file_get_contents($url);
     if ($response === false) {
-        return null; // یا داده پیش فرض
+        return null;
     }
     $ipinfo = json_decode($response, true);
     return $ipinfo;
@@ -325,18 +219,19 @@ function get_flag($ip)
 {
     $flag = "";
     $ip_info = ip_info($ip);
-    // کنترل اینکه ip_info مقدار معتبری برگشته باشد و کلید country باشد
-    if ($ip_info && isset($ip_info["country"])) {
-        $location = $ip_info["country"];
-        $flag = $location . getFlags($location);
+    // در iplocation.net کد کشور با کلید country_code2 برگردانده می‌شود
+    if ($ip_info && isset($ip_info["country_code2"])) {
+        $location = $ip_info["country_code2"];
+        $flag = $location . " " . getFlags($location);
     } else {
-        $flag = "R 🚩";
+        $flag = "RELAY 🚩";
     }
     return $flag;
 }
 
 function getFlags($country_code)
 {
+    $country_code = strtoupper($country_code);
     $flag = mb_convert_encoding(
         "&#" . (127397 + ord($country_code[0])) . ";",
         "UTF-8",
@@ -349,7 +244,6 @@ function getFlags($country_code)
     );
     return $flag;
 }
-
 
 function get_ip($config, $type, $is_reality)
 {
@@ -382,6 +276,7 @@ function get_vless_ip($input, $is_reality)
             ? $input["params"]["sni"]
             : (!empty($input["params"]["host"])
                 ? $input["params"]["host"]
+
                 : $input["hostname"]));
 }
 
@@ -425,7 +320,7 @@ function ping($ip, $port)
     $timeout = 0.5;
     $context = stream_context_create([
         'socket' => [
-            'bindto' => '0:0', // Optional: enforce source IP
+            'bindto' => '0:0',
         ]
     ]);
     $fp = @stream_socket_client(
@@ -440,80 +335,97 @@ function ping($ip, $port)
 
     if ($fp) {
         fclose($fp);
-        return round(($end - $start) * 1000, 2); // return ping in ms
+        return round(($end - $start) * 1000, 2);
     }
     return "unavailable";
 }
 
-function generate_name($flag, $ip, $port, $ping, $is_reality)
+// تابع جدید برای تولید نام بدون پینگ و با عدد تصادفی
+function generate_name($flag, $is_reality)
 {
+    // تولید عدد تصادفی 4 رقمی
+    $unique_id = rand(1000, 9999);
+    
     $name = "";
     switch ($is_reality) {
         case true:
-            $name =
-                "R | " .
-                $flag .
-                " | " .
-                " @VPNineh" .
-                " | " .
-                $ping;
+            $name = "R | " . $flag . " | @VPNineh | " . $unique_id;
             break;
         case false:
-            $name =
-                $flag .
-                " | " .
-                "@VPNineh" .
-                " | " .
-                $ping;
+            $name = $flag . " | @VPNineh | " . $unique_id;
             break;
     }
     return $name;
 }
 
+// تابع کمکی برای ایجاد امضای منحصر به فرد جهت حذف تکراری‌ها
+function get_config_signature($config, $type)
+{
+    $signature = "";
+    switch ($type) {
+        case "vmess":
+            $signature = $config['add'] . ":" . $config['port'] . ":" . $config['id'];
+            break;
+        case "vless":
+        case "trojan":
+            $host = !empty($config['params']['sni']) ? $config['params']['sni'] : $config['hostname'];
+            $signature = $host . ":" . $config['port'] . ":" . $config['username'];
+            break;
+        case "ss":
+            $signature = $config['server_address'] . ":" . $config['server_port'] . ":" . $config['password'];
+            break;
+    }
+    return md5($signature);
+}
+
 function process_config($config)
 {
+    global $seen_signatures; // دسترسی به آرایه جهانی
+
     $name_array = [
         "vmess" => "ps",
         "vless" => "hash",
         "trojan" => "hash",
         "ss" => "name",
     ];
+
     $type = detect_type($config);
-    $is_reality = stripos($config, "reality") !== false ? true : false;
+    if (empty($type)) return false;
+
     $parsed_config = parse_config($config);
+
+    // --- شروع منطق حذف تکراری ---
+    // ایجاد یک امضای یکتا برای کانفیگ فعلی
+    $signature = get_config_signature($parsed_config, $type);
+    
+    // اگر قبلاً این امضا را دیده‌ایم، این کانفیگ تکراری است و رد می‌شود
+    if (in_array($signature, $seen_signatures)) {
+        return false;
+    }
+    // امضا را به لیست دیده‌شده‌ها اضافه کن
+    $seen_signatures[] = $signature;
+    // --- پایان منطق حذف تکراری ---
+
+    $is_reality = stripos($config, "reality") !== false ? true : false;
     $ip = get_ip($parsed_config, $type, $is_reality);
     $port = get_port($parsed_config, $type);
+    
+    // پینگ فقط برای چک کردن زنده بودن سرور استفاده می‌شود
     $ping_data = ping($ip, $port);
+    
     if ($ping_data !== "unavailable") {
         $flag = get_flag($ip);
         $name_key = $name_array[$type];
-        $parsed_config[$name_key] = generate_name(
-            $flag,
-            $ip,
-            $port,
-            $ping_data,
-            $is_reality
-        );
+        
+        // فراخوانی تابع جدید نام‌گذاری (بدون ارسال پینگ)
+        $parsed_config[$name_key] = generate_name($flag, $is_reality);
+        
         $final_config = build_config($parsed_config, $type);
         return $final_config;
     }
     return false;
 }
 
-/** Extract reality configs */
-function get_reality($input)
-{
-    $array = explode("\n", $input);
-    $output = "";
-    foreach ($array as $item) {
-        if (stripos($item, "reality")) {
-            $output .= $output === "" ? $item : "\n$item";
-        }
-    }
-    return $output;
-}
-
-/** Check if subscription is base64 encoded or not */
 function is_base64_encoded($string)
 {
     if (base64_encode(base64_decode($string, true)) === $string) {
@@ -539,7 +451,11 @@ function process_subscriptions_helper($input)
 {
     $output = [];
     $data_array = explode("\n", $input);
+    
     foreach ($data_array as $config) {
+        $config = trim($config);
+        if (empty($config)) continue;
+
         $processed_config = process_config($config);
         if ($processed_config !== false) {
             $type = detect_type($processed_config);
@@ -564,34 +480,41 @@ function process_subscriptions_helper($input)
 
 function merge_subscription($input)
 {
+    global $seen_signatures;
+    $seen_signatures = []; // ریست کردن لیست تکراری‌ها برای هر بار اجرای کلی
+
     $output = [];
     $vmess = "";
     $vless = "";
     $trojan = "";
     $shadowsocks = "";
+
     foreach ($input as $subscription_url) {
-        $subscription_data = file_get_contents($subscription_url);
-        $processed_array = process_subscriptions($subscription_data);
-        $vmess .= isset($processed_array["vmess"])
-            ? implode("\n", $processed_array["vmess"]) . "\n"
-            : null;
-        $vless .= isset($processed_array["vless"])
-            ? implode("\n", $processed_array["vless"]) . "\n"
-            : null;
-        $trojan .= isset($processed_array["trojan"])
-            ? implode("\n", $processed_array["trojan"]) . "\n"
-            : null;
-        $shadowsocks .= isset($processed_array["ss"])
-            ? implode("\n", $processed_array["ss"]) . "\n"
-            : null;
+        $subscription_data = @file_get_contents($subscription_url);
+        if($subscription_data) {
+            $processed_array = process_subscriptions($subscription_data);
+            $vmess .= isset($processed_array["vmess"])
+                ? implode("\n", $processed_array["vmess"]) . "\n"
+                : null;
+            $vless .= isset($processed_array["vless"])
+                ? implode("\n", $processed_array["vless"]) . "\n"
+                : null;
+            $trojan .= isset($processed_array["trojan"])
+                ? implode("\n", $processed_array["trojan"]) . "\n"
+                : null;
+            $shadowsocks .= isset($processed_array["ss"])
+                ? implode("\n", $processed_array["ss"]) . "\n"
+                : null;
+        }
     }
-    $output['vmess'] = explode("\n", $vmess);
-    $output['vless'] = explode("\n", $vless);
-    $output['trojan'] = explode("\n", $trojan);
-    $output['ss'] = explode("\n", $shadowsocks);
+    $output['vmess'] = array_filter(explode("\n", $vmess));
+    $output['vless'] = array_filter(explode("\n", $vless));
+    $output['trojan'] = array_filter(explode("\n", $trojan));
+    $output['ss'] = array_filter(explode("\n", $shadowsocks));
     return $output;
 }
 
 function array_to_subscription($input) {
     return implode("\n", $input);
 }
+?>
