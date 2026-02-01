@@ -1,270 +1,597 @@
 <?php
-
-/* =======================
-   Detect config type
-======================= */
+/** Detect Type of Config */
 function detect_type($input)
 {
-    if (substr($input, 0, 8) === "vmess://") return "vmess";
-    if (substr($input, 0, 8) === "vless://") return "vless";
-    if (substr($input, 0, 9) === "trojan://") return "trojan";
-    if (substr($input, 0, 5) === "ss://") return "ss";
-    return "";
+    $type = "";
+    if (substr($input, 0, 8) === "vmess://") {
+        $type = "vmess";
+    } elseif (substr($input, 0, 8) === "vless://") {
+        $type = "vless";
+    } elseif (substr($input, 0, 9) === "trojan://") {
+        $type = "trojan";
+    } elseif (substr($input, 0, 5) === "ss://") {
+        $type = "ss";
+    }
+
+    return $type;
 }
 
-/* =======================
-   Parse / Build
-======================= */
 function parse_config($input)
 {
     $type = detect_type($input);
-    if ($type === "vmess") return decode_vmess($input);
-    if ($type === "vless" || $type === "trojan") return parseProxyUrl($input);
-    if ($type === "ss") return ParseShadowsocks($input);
-    return null;
+    $parsed_config = [];
+    switch ($type) {
+        case "vmess":
+            $parsed_config = decode_vmess($input);
+            break;
+        case "vless":
+        case "trojan":
+            $parsed_config = parseProxyUrl($input, $type);
+            break;
+        case "ss":
+            $parsed_config = ParseShadowsocks($input);
+            break;
+    }
+    return $parsed_config;
 }
 
 function build_config($input, $type)
 {
-    if ($type === "vmess") return encode_vmess($input);
-    if ($type === "vless" || $type === "trojan") return buildProxyUrl($input, $type);
-    if ($type === "ss") return BuildShadowsocks($input);
-    return "";
+    $build_config = "";
+    switch ($type) {
+        case "vmess":
+            $build_config = encode_vmess($input);
+            break;
+        case "vless":
+        case "trojan":
+            $build_config = buildProxyUrl($input, $type);
+            break;
+        case "ss":
+            $build_config = BuildShadowsocks($input);
+            break;
+    }
+    return $build_config;
 }
 
-/* =======================
-   VMESS
-======================= */
-function decode_vmess($vmess)
+/** parse vmess configs */
+function decode_vmess($vmess_config)
 {
-    return json_decode(base64_decode(substr($vmess, 8)), true);
+    $vmess_data = substr($vmess_config, 8); // remove "vmess://"
+    $decoded_data = json_decode(base64_decode($vmess_data), true);
+    return $decoded_data;
 }
 
+/** build vmess configs */
 function encode_vmess($config)
 {
-    return "vmess://" . base64_encode(json_encode($config, JSON_UNESCAPED_UNICODE));
+    $encoded_data = base64_encode(json_encode($config));
+    $vmess_config = "vmess://" . $encoded_data;
+    return $vmess_config;
 }
 
-/* =======================
-   VLESS / TROJAN
-======================= */
-function parseProxyUrl($url)
+/** remove duplicate vmess configs */
+function remove_duplicate_vmess($input)
 {
-    $u = parse_url($url);
-    parse_str(isset($u['query']) ? $u['query'] : '', $params);
-
-    return [
-        "username" => isset($u['user']) ? $u['user'] : '',
-        "hostname" => isset($u['host']) ? $u['host'] : '',
-        "port" => isset($u['port']) ? $u['port'] : '',
-        "params" => $params,
-        "hash" => isset($u['fragment']) ? $u['fragment'] : ''
-    ];
+    $array = explode("\n", $input);
+    $result = [];
+    foreach ($array as $item) {
+        $parts = decode_vmess($item);
+        if ($parts !== null) {
+            $part_ps = $parts["ps"];
+            unset($parts["ps"]);
+            if (count($parts) >= 3) {
+                ksort($parts);
+                $part_serialize = serialize($parts);
+                $result[$part_serialize][] = $part_ps ?? "";
+            }
+        }
+    }
+    $finalResult = [];
+    foreach ($result as $serial => $ps) {
+        $partAfterHash = $ps[0] ?? "";
+        $part_serialize = unserialize($serial);
+        $part_serialize["ps"] = $partAfterHash;
+        $finalResult[] = encode_vmess($part_serialize);
+    }
+    $output = "";
+    foreach ($finalResult as $config) {
+        $output .= $output == "" ? $config : "\n" . $config;
+    }
+    return $output;
 }
 
-function buildProxyUrl($o, $type)
+/** Parse vless and trojan config*/
+function parseProxyUrl($url, $type = "trojan")
+{
+    // Parse the URL into components
+    $parsedUrl = parse_url($url);
+
+    // Extract the parameters from the query string
+    $params = [];
+    if (isset($parsedUrl["query"])) {
+        parse_str($parsedUrl["query"], $params);
+    }
+
+    // Construct the output object
+    $output = [
+        "protocol" => $type,
+        "username" => isset($parsedUrl["user"]) ? $parsedUrl["user"] : "",
+        "hostname" => isset($parsedUrl["host"]) ? $parsedUrl["host"] : "",
+        "port" => isset($parsedUrl["port"]) ? $parsedUrl["port"] : "",
+        "params" => $params,
+        "hash" => isset($parsedUrl["fragment"]) ? $parsedUrl["fragment"] : "",
+    ];
+
+    return $output;
+}
+
+/** Build vless and trojan config*/
+function buildProxyUrl($obj, $type = "trojan")
 {
     $url = $type . "://";
-    if (!empty($o['username'])) $url .= $o['username'] . "@";
-    $url .= $o['hostname'];
-    if (!empty($o['port'])) $url .= ":" . $o['port'];
-    if (!empty($o['params'])) $url .= "?" . http_build_query($o['params']);
-    if (!empty($o['hash'])) $url .= "#" . $o['hash'];
+    $url .= addUsernameAndPassword($obj);
+    $url .= $obj["hostname"];
+    $url .= addPort($obj);
+    $url .= addParams($obj);
+    $url .= addHash($obj);
     return $url;
 }
 
-/* =======================
-   SHADOWSOCKS
-======================= */
-function ParseShadowsocks($c)
+function addUsernameAndPassword($obj)
 {
-    $u = parse_url($c);
-    $decoded = base64_decode($u['user']);
-    list($method, $pass) = explode(":", $decoded, 2);
+    $url = "";
+    if ($obj["username"] !== "") {
+        $url .= $obj["username"];
+        if (isset($obj["pass"]) && $obj["pass"] !== "") {
+            $url .= ":" . $obj["pass"];
+        }
+        $url .= "@";
+    }
+    return $url;
+}
 
-    return [
-        "encryption_method" => $method,
-        "password" => $pass,
-        "server_address" => $u['host'],
-        "server_port" => $u['port'],
-        "name" => isset($u['fragment']) ? urldecode($u['fragment']) : ''
+function addPort($obj)
+{
+    $url = "";
+    if (isset($obj["port"]) && $obj["port"] !== "") {
+        $url .= ":" . $obj["port"];
+    }
+    return $url;
+}
+
+function addParams($obj)
+{
+    $url = "";
+    if (!empty($obj["params"])) {
+        $url .= "?" . http_build_query($obj["params"]);
+    }
+    return $url;
+}
+
+function addHash($obj)
+{
+    $url = "";
+    if (isset($obj["hash"]) && $obj["hash"] !== "") {
+        $url .= "#" . $obj["hash"];
+    }
+    return $url;
+}
+
+/** remove duplicate vless and trojan config*/
+function remove_duplicate_xray($input, $type)
+{
+    $array = explode("\n", $input);
+
+    foreach ($array as $item) {
+        $parts = parseProxyUrl($item, $type);
+        $part_hash = $parts["hash"];
+        unset($parts["hash"]);
+        ksort($parts["params"]);
+        $part_serialize = serialize($parts);
+        $result[$part_serialize][] = $part_hash ?? "";
+    }
+
+    $finalResult = [];
+    foreach ($result as $url => $parts) {
+        $partAfterHash = $parts[0] ?? "";
+        $part_serialize = unserialize($url);
+        $part_serialize["hash"] = $partAfterHash;
+        $finalResult[] = buildProxyUrl($part_serialize, $type);
+    }
+
+    $output = "";
+    foreach ($finalResult as $config) {
+        $output .= $output == "" ? $config : "\n" . $config;
+    }
+    return $output;
+}
+
+/** parse shadowsocks configs */
+function ParseShadowsocks($config_str)
+{
+    // Parse the config string as a URL
+    $url = parse_url($config_str);
+
+    // Extract the encryption method and password from the user info
+    list($encryption_method, $password) = explode(
+        ":",
+        base64_decode($url["user"])
+    );
+
+    // Extract the server address and port from the host and path
+    $server_address = $url["host"];
+    $server_port = $url["port"];
+
+    // Extract the name from the fragment (if present)
+    $name = isset($url["fragment"]) ? urldecode($url["fragment"]) : null;
+
+    // Create an array to hold the server configuration
+    $server = [
+        "encryption_method" => $encryption_method,
+        "password" => $password,
+        "server_address" => $server_address,
+        "server_port" => $server_port,
+        "name" => $name,
     ];
+
+    // Return the server configuration as a JSON string
+    return $server;
 }
 
-function BuildShadowsocks($s)
+/** build shadowsocks configs */
+function BuildShadowsocks($server)
 {
-    $user = base64_encode($s['encryption_method'] . ":" . $s['password']);
-    $url = "ss://{$user}@{$s['server_address']}:{$s['server_port']}";
-    if (!empty($s['name'])) $url .= "#" . urlencode($s['name']);
+    // Encode the encryption method and password as a Base64-encoded string
+    $user = base64_encode(
+        $server["encryption_method"] . ":" . $server["password"]
+    );
+
+    // Construct the URL from the server address, port, and user info
+    $url = "ss://$user@{$server["server_address"]}:{$server["server_port"]}";
+
+    // If the name is present, add it as a fragment to the URL
+    if (!empty($server["name"])) {
+        $url .= "#" . urlencode($server["name"]);
+    }
+
+    // Return the URL as a string
     return $url;
 }
 
-/* =======================
-   IP / LOCATION
-======================= */
-function is_ip($s)
+/** remove duplicate shadowsocks configs */
+function remove_duplicate_ss($input)
 {
-    return filter_var($s, FILTER_VALIDATE_IP) !== false;
+    $array = explode("\n", $input);
+
+    foreach ($array as $item) {
+        $parts = ParseShadowsocks($item);
+        $part_hash = $parts["name"];
+        unset($parts["name"]);
+        ksort($parts);
+        $part_serialize = serialize($parts);
+        $result[$part_serialize][] = $part_hash ?? "";
+    }
+
+    $finalResult = [];
+    foreach ($result as $url => $parts) {
+        $partAfterHash = $parts[0] ?? "";
+        $part_serialize = unserialize($url);
+        $part_serialize["name"] = $partAfterHash;
+        $finalResult[] = BuildShadowsocks($part_serialize);
+    }
+
+    $output = "";
+    foreach ($finalResult as $config) {
+        $output .= $output == "" ? $config : "\n" . $config;
+    }
+    return $output;
+}
+
+function is_ip($string)
+{
+    $ipv4_pattern = '/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/';
+    $ipv6_pattern = '/^[0-9a-fA-F:]+$/'; // matches any valid IPv6 address
+
+    if (preg_match($ipv4_pattern, $string) || preg_match($ipv6_pattern, $string)) {
+        return true;
+    } else {
+        return false;
+    }
 }
 
 function ip_info($ip)
 {
-    if (!is_ip($ip)) {
-        $records = dns_get_record($ip, DNS_A);
-        if (!$records) return null;
-        $ip = $records[array_rand($records)]['ip'];
+    if (is_ip($ip) === false) {
+        $ip_address_array = dns_get_record($ip, DNS_A);
+        if (is_array($ip_address_array)) {
+            $randomKey = array_rand($ip_address_array);
+            $ip = $ip_address_array[$randomKey]["ip"];
+        }
     }
 
-    $url = "https://api.iplocation.io/?ip={$ip}";
-    $context = stream_context_create([
-        'http' => ['timeout' => 2]
-    ]);
+    // استفاده از API جدید ipinfo.io به جای api.country.is
+    $url = "https://ipinfo.io/" . $ip . "/json";
 
-    $response = @file_get_contents($url, false, $context);
-    if ($response === false) return null;
-
-    $data = json_decode($response, true);
-    return is_array($data) ? $data : null;
+    // مدیریت خطا با @ و چک کردن نتیجه
+    $response = @file_get_contents($url);
+    if ($response === false) {
+        return null; // یا داده پیش فرض
+    }
+    $ipinfo = json_decode($response, true);
+    return $ipinfo;
 }
 
 function get_flag($ip)
 {
-    $info = ip_info($ip);
-    if (!$info || empty($info['country_code2'])) return "XX 🚩";
-
-    $cc = strtoupper($info['country_code2']);
-    return $cc . getFlags($cc);
+    $flag = "";
+    $ip_info = ip_info($ip);
+    // کنترل اینکه ip_info مقدار معتبری برگشته باشد و کلید country باشد
+    if ($ip_info && isset($ip_info["country"])) {
+        $location = $ip_info["country"];
+        $flag = $location . getFlags($location);
+    } else {
+        $flag = "R 🚩";
+    }
+    return $flag;
 }
 
-function getFlags($cc)
+function getFlags($country_code)
 {
-    return mb_convert_encoding(
-        "&#" . (127397 + ord($cc[0])) . ";&#" . (127397 + ord($cc[1])) . ";",
+    $flag = mb_convert_encoding(
+        "&#" . (127397 + ord($country_code[0])) . ";",
         "UTF-8",
         "HTML-ENTITIES"
     );
+    $flag .= mb_convert_encoding(
+        "&#" . (127397 + ord($country_code[1])) . ";",
+        "UTF-8",
+        "HTML-ENTITIES"
+    );
+    return $flag;
 }
 
-/* =======================
-   IP / PORT
-======================= */
-function get_ip($c, $type, $reality)
-{
-    if ($type === "vmess") return !empty($c['sni']) ? $c['sni'] : (!empty($c['host']) ? $c['host'] : $c['add']);
-    if ($type === "vless") return $reality ? $c['hostname'] : (!empty($c['params']['sni']) ? $c['params']['sni'] : $c['hostname']);
-    if ($type === "trojan") return !empty($c['params']['sni']) ? $c['params']['sni'] : $c['hostname'];
-    if ($type === "ss") return $c['server_address'];
-    return null;
-}
 
-function get_port($c, $type)
+function get_ip($config, $type, $is_reality)
 {
-    return $type === "ss" ? $c['server_port'] : (isset($c['port']) ? $c['port'] : null);
-}
-
-/* =======================
-   DEDUP CORE
-======================= */
-function generate_fingerprint($parsed, $type)
-{
-    $base = [
-        'type' => $type,
-        'host' => get_ip($parsed, $type, false),
-        'port' => get_port($parsed, $type)
-    ];
-
-    if (isset($parsed['params'])) {
-        ksort($parsed['params']);
-        $base['params'] = $parsed['params'];
+    switch ($type) {
+        case "vmess":
+            return get_vmess_ip($config);
+        case "vless":
+            return get_vless_ip($config, $is_reality);
+        case "trojan":
+            return get_trojan_ip($config);
+        case "ss":
+            return get_ss_ip($config);
     }
-
-    return hash('sha256', json_encode($base));
 }
 
-function short_id($fp)
+function get_vmess_ip($input)
 {
-    return substr((string)hexdec(substr($fp, 0, 6)), 0, 4);
+    return !empty($input["sni"])
+        ? $input["sni"]
+        : (!empty($input["host"])
+            ? $input["host"]
+            : $input["add"]);
 }
 
-/* =======================
-   NAME
-======================= */
-function generate_name($flag, $id, $reality)
+function get_vless_ip($input, $is_reality)
 {
-    return $reality
-        ? "R | {$flag} | #{$id} @VPNineh"
-        : "{$flag} | #{$id} @VPNineh";
+    return $is_reality
+        ? $input["hostname"]
+        : (!empty($input["params"]["sni"])
+            ? $input["params"]["sni"]
+            : (!empty($input["params"]["host"])
+                ? $input["params"]["host"]
+                : $input["hostname"]));
 }
 
-/* =======================
-   PROCESS CONFIG
-======================= */
+function get_trojan_ip($input)
+{
+    return !empty($input["params"]["sni"])
+        ? $input["params"]["sni"]
+        : (!empty($input["params"]["host"])
+            ? $input["params"]["host"]
+            : $input["hostname"]);
+}
+
+function get_ss_ip($input)
+{
+    return $input["server_address"];
+}
+
+function get_port($input, $type)
+{
+    $port = "";
+    switch ($type) {
+        case "vmess":
+            $port = $input["port"];
+            break;
+        case "vless":
+            $port = $input["port"];
+            break;
+        case "trojan":
+            $port = $input["port"];
+            break;
+        case "ss":
+            $port = $input["server_port"];
+            break;
+    }
+    return $port;
+}
+
+function ping($ip, $port)
+{
+    $start = microtime(true);
+    $timeout = 0.5;
+    $context = stream_context_create([
+        'socket' => [
+            'bindto' => '0:0', // Optional: enforce source IP
+        ]
+    ]);
+    $fp = @stream_socket_client(
+        "tcp://$ip:$port",
+        $errno,
+        $errstr,
+        $timeout,
+        STREAM_CLIENT_CONNECT,
+        $context
+    );
+    $end = microtime(true);
+
+    if ($fp) {
+        fclose($fp);
+        return round(($end - $start) * 1000, 2); // return ping in ms
+    }
+    return "unavailable";
+}
+
+function generate_name($flag, $ip, $port, $ping, $is_reality)
+{
+    $name = "";
+    switch ($is_reality) {
+        case true:
+            $name =
+                "R | " .
+                $flag .
+                " | " .
+                " @VPNineh" .
+                " | " .
+                $ping;
+            break;
+        case false:
+            $name =
+                $flag .
+                " | " .
+                "@VPNineh" .
+                " | " .
+                $ping;
+            break;
+    }
+    return $name;
+}
+
 function process_config($config)
 {
+    $name_array = [
+        "vmess" => "ps",
+        "vless" => "hash",
+        "trojan" => "hash",
+        "ss" => "name",
+    ];
     $type = detect_type($config);
-    if (!$type) return false;
-
-    $parsed = parse_config($config);
-    if (!$parsed) return false;
-
-    $is_reality = stripos($config, "reality") !== false;
-    $ip = get_ip($parsed, $type, $is_reality);
-    $port = get_port($parsed, $type);
-    if (!$ip || !$port) return false;
-
-    $fp = generate_fingerprint($parsed, $type);
-    $id = short_id($fp);
-    $flag = get_flag($ip);
-
-    if ($type === "vmess") $parsed['ps'] = generate_name($flag, $id, $is_reality);
-    elseif ($type === "ss") $parsed['name'] = generate_name($flag, $id, $is_reality);
-    else $parsed['hash'] = generate_name($flag, $id, $is_reality);
-
-    return build_config($parsed, $type);
+    $is_reality = stripos($config, "reality") !== false ? true : false;
+    $parsed_config = parse_config($config);
+    $ip = get_ip($parsed_config, $type, $is_reality);
+    $port = get_port($parsed_config, $type);
+    $ping_data = ping($ip, $port);
+    if ($ping_data !== "unavailable") {
+        $flag = get_flag($ip);
+        $name_key = $name_array[$type];
+        $parsed_config[$name_key] = generate_name(
+            $flag,
+            $ip,
+            $port,
+            $ping_data,
+            $is_reality
+        );
+        $final_config = build_config($parsed_config, $type);
+        return $final_config;
+    }
+    return false;
 }
 
-/* =======================
-   SUBSCRIPTIONS
-======================= */
-function process_subscriptions($input)
+/** Extract reality configs */
+function get_reality($input)
 {
-    if (base64_encode(base64_decode($input, true)) === $input) {
-        $input = base64_decode($input);
-    }
-
-    $seen = [];
-    $out = [];
-
-    foreach (explode("\n", $input) as $c) {
-        $c = trim($c);
-        if ($c === "") continue;
-
-        $processed = process_config($c);
-        if (!$processed) continue;
-
-        $type = detect_type($processed);
-        $fp = generate_fingerprint(parse_config($processed), $type);
-        if (isset($seen[$fp])) continue;
-
-        $seen[$fp] = true;
-        $out[$type][] = $processed;
-    }
-
-    return $out;
-}
-
-function merge_subscription($urls)
-{
-    $out = [];
-    foreach ($urls as $url) {
-        $data = @file_get_contents($url);
-        if (!$data) continue;
-
-        $processed = process_subscriptions($data);
-        foreach ($processed as $type => $list) {
-            if (!isset($out[$type])) $out[$type] = [];
-            $out[$type] = array_merge($out[$type], $list);
+    $array = explode("\n", $input);
+    $output = "";
+    foreach ($array as $item) {
+        if (stripos($item, "reality")) {
+            $output .= $output === "" ? $item : "\n$item";
         }
     }
-    return $out;
+    return $output;
+}
+
+/** Check if subscription is base64 encoded or not */
+function is_base64_encoded($string)
+{
+    if (base64_encode(base64_decode($string, true)) === $string) {
+        return "true";
+    } else {
+        return "false";
+    }
+}
+
+function process_subscriptions($input)
+{
+    $output = [];
+    if (is_base64_encoded($input) === "true") {
+        $data = base64_decode($input);
+        $output = process_subscriptions_helper($data);
+    } else {
+        $output = process_subscriptions_helper($input);
+    }
+    return $output;
+}
+
+function process_subscriptions_helper($input)
+{
+    $output = [];
+    $data_array = explode("\n", $input);
+    foreach ($data_array as $config) {
+        $processed_config = process_config($config);
+        if ($processed_config !== false) {
+            $type = detect_type($processed_config);
+            switch ($type) {
+                case "vmess":
+                    $output["vmess"][] = $processed_config;
+                    break;
+                case "vless":
+                    $output["vless"][] = $processed_config;
+                    break;
+                case "trojan":
+                    $output["trojan"][] = $processed_config;
+                    break;
+                case "ss":
+                    $output["ss"][] = $processed_config;
+                    break;
+            }
+        }
+    }
+    return $output;
+}
+
+function merge_subscription($input)
+{
+    $output = [];
+    $vmess = "";
+    $vless = "";
+    $trojan = "";
+    $shadowsocks = "";
+    foreach ($input as $subscription_url) {
+        $subscription_data = file_get_contents($subscription_url);
+        $processed_array = process_subscriptions($subscription_data);
+        $vmess .= isset($processed_array["vmess"])
+            ? implode("\n", $processed_array["vmess"]) . "\n"
+            : null;
+        $vless .= isset($processed_array["vless"])
+            ? implode("\n", $processed_array["vless"]) . "\n"
+            : null;
+        $trojan .= isset($processed_array["trojan"])
+            ? implode("\n", $processed_array["trojan"]) . "\n"
+            : null;
+        $shadowsocks .= isset($processed_array["ss"])
+            ? implode("\n", $processed_array["ss"]) . "\n"
+            : null;
+    }
+    $output['vmess'] = explode("\n", $vmess);
+    $output['vless'] = explode("\n", $vless);
+    $output['trojan'] = explode("\n", $trojan);
+    $output['ss'] = explode("\n", $shadowsocks);
+    return $output;
+}
+
+function array_to_subscription($input) {
+    return implode("\n", $input);
 }
